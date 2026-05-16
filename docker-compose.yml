@@ -8,17 +8,11 @@ services:
     volumes:
       - ./:/workspace
       - gradle-cache:/root/.gradle
-      - adb-keys:/root/.android
+      # Persists ~/.android/debug.keystore so the debug signing key (and its
+      # SHA-1, used for Firebase auth) stays stable across builds.
+      - debug-keystore:/root/.android
     command: gradle --no-daemon assembleDebug
-
-  tools:
-    image: healthfire-android:latest
-    working_dir: /workspace
-    volumes:
-      - ./:/workspace
-      - adb-keys:/root/.android
-    command: tail -f /dev/null
 
 volumes:
   gradle-cache:
-  adb-keys:
+  debug-keystore:

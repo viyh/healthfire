@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
-# healthfire - dev workflow wrapper. Everything runs in Docker; nothing is
-# installed on the host. Run ./healthfire with no arguments for the full list.
+# healthfire - dev workflow wrapper.
+#
+# The build runs in Docker, so no JDK or Android SDK is needed on the host.
+# Device commands use the host's adb: a Docker Desktop container cannot reach
+# a LAN-attached phone, but the host can (and does mDNS discovery natively).
 set -euo pipefail
 
 APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 RELEASE_APK_PATH="app/build/outputs/apk/release/app-release.apk"
 PKG="io.github.viyh.healthfire"
 
-tools_up() {
-  if ! docker compose ps --services --filter "status=running" | grep -qx tools; then
-    docker compose up -d tools >/dev/null
-  fi
+# Serial of the connected phone. Picked explicitly so a command still works
+# when adb briefly lists the phone under more than one transport (mDNS).
+device_serial() {
+  adb devices | awk -F'\t' '$2 == "device" { print $1; exit }'
 }
 
-tools_exec() {
-  tools_up
-  docker compose exec tools "$@"
+# Run adb against the connected phone.
+dadb() {
+  local serial
+  serial="$(device_serial)"
+  if [ -z "$serial" ]; then
+    echo "No phone connected. Enable Wireless debugging, then:" >&2
+    echo "  ./healthfire connect <ip:port>   (ip:port is shown on the phone)" >&2
+    exit 1
+  fi
+  adb -s "$serial" "$@"
 }
 
 case "${1:-help}" in
@@ -26,44 +36,60 @@ case "${1:-help}" in
     docker compose run --rm build gradle --no-daemon assembleRelease
     ls -lh "$RELEASE_APK_PATH"
     ;;
-  release-install)
-    tools_exec adb install -r "$RELEASE_APK_PATH"
-    ;;
-  release-run)
-    docker compose run --rm build gradle --no-daemon assembleRelease
-    tools_exec adb install -r "$RELEASE_APK_PATH"
-    tools_exec adb shell am start -n "$PKG/.MainActivity"
-    ;;
   test)
     docker compose run --rm build gradle --no-daemon testDebugUnitTest
     ;;
-  pair)
-    # usage: ./healthfire pair <host:port> <code>
-    tools_exec adb pair "$2" "$3"
+  clean)
+    docker compose run --rm build gradle --no-daemon clean
+    ;;
+  shell)
+    docker compose run --rm build bash
     ;;
   connect)
-    # usage: ./healthfire connect <host:port>
-    tools_exec adb connect "$2"
+    # usage: ./healthfire connect [ip:port]
+    # With no argument, relies on adb's mDNS auto-discovery.
+    if [ -n "${2:-}" ]; then
+      adb connect "$2"
+    else
+      adb start-server >/dev/null 2>&1 || true
+      sleep 1
+      adb devices
+    fi
+    ;;
+  disconnect)
+    adb disconnect
+    ;;
+  pair)
+    # usage: ./healthfire pair <ip:port> <code>
+    adb pair "$2" "$3"
     ;;
   devices)
-    tools_exec adb devices
+    adb devices
     ;;
   install)
-    tools_exec adb install -r "$APK_PATH"
+    dadb install -r "$APK_PATH"
     ;;
-  uninstall)
-    tools_exec adb uninstall "$PKG" || true
+  release-install)
+    dadb install -r "$RELEASE_APK_PATH"
     ;;
   start)
-    tools_exec adb shell am start -n "$PKG/.MainActivity"
+    dadb shell am start -n "$PKG/.MainActivity"
     ;;
   run)
     docker compose run --rm build
-    tools_exec adb install -r "$APK_PATH"
-    tools_exec adb shell am start -n "$PKG/.MainActivity"
+    dadb install -r "$APK_PATH"
+    dadb shell am start -n "$PKG/.MainActivity"
+    ;;
+  release-run)
+    docker compose run --rm build gradle --no-daemon assembleRelease
+    dadb install -r "$RELEASE_APK_PATH"
+    dadb shell am start -n "$PKG/.MainActivity"
+    ;;
+  uninstall)
+    dadb uninstall "$PKG" || true
     ;;
   logcat)
-    tools_exec adb logcat -v color \
+    dadb logcat -v color \
       Healthfire:V \
       HealthConnect:W HealthConnectClient:W \
       WM-WorkerWrapper:I WorkManager:I \
@@ -72,21 +98,15 @@ case "${1:-help}" in
       "*:S"
     ;;
   logcat-pid)
-    pid=$(docker compose exec -T tools adb shell pidof "$PKG" | tr -d '\r\n')
+    pid="$(dadb shell pidof "$PKG" | tr -d '\r\n')"
     if [ -z "$pid" ]; then
-      echo "App not running. Launch it first (./healthfire start)."
+      echo "App not running. Launch it first: ./healthfire start" >&2
       exit 1
     fi
-    tools_exec adb logcat -v color --pid "$pid"
+    dadb logcat -v color --pid "$pid"
     ;;
   logcat-all)
-    tools_exec adb logcat -v color
-    ;;
-  shell)
-    tools_exec bash
-    ;;
-  clean)
-    docker compose run --rm build gradle --no-daemon clean
+    dadb logcat -v color
     ;;
   down)
     docker compose down
@@ -95,28 +115,30 @@ case "${1:-help}" in
     cat <<EOF
 healthfire dev workflow
 
-Setup (once):
-  ./healthfire build                build the Docker image and debug APK
-  ./healthfire pair HOST:PORT CODE  pair with your phone (Wireless Debugging)
-  ./healthfire connect HOST:PORT    connect to a paired phone
+The build runs in Docker. Device commands use the host's adb.
 
-Daily:
-  ./healthfire run                  build + install + launch (debug)
-  ./healthfire release-run          build + install + launch (release)
-  ./healthfire build                build debug APK only
-  ./healthfire release              build release APK only
-  ./healthfire test                 run JVM unit tests
-  ./healthfire install              install last-built debug APK
-  ./healthfire release-install      install last-built release APK
-  ./healthfire start                launch the app on the device
-  ./healthfire logcat               stream filtered logs
-  ./healthfire logcat-pid           stream logs from the app process only
-  ./healthfire logcat-all           stream everything (noisy)
-  ./healthfire devices              list connected devices
-  ./healthfire shell                bash shell in the tools container
-  ./healthfire uninstall            uninstall from the device
-  ./healthfire clean                gradle clean
-  ./healthfire down                 stop the tools container
+Build (Docker):
+  ./healthfire build               build the debug APK
+  ./healthfire release             build the release APK
+  ./healthfire test                run JVM unit tests
+  ./healthfire clean               gradle clean
+  ./healthfire shell               shell into the build container
+
+Device (host adb):
+  ./healthfire connect [ip:port]   connect to the phone (Wireless debugging)
+  ./healthfire pair <ip:port> <code>   pair with the phone
+  ./healthfire run                 build + install + launch (debug)
+  ./healthfire release-run         build + install + launch (release)
+  ./healthfire install             install the last-built debug APK
+  ./healthfire release-install     install the last-built release APK
+  ./healthfire start               launch the app on the phone
+  ./healthfire devices             list connected devices
+  ./healthfire logcat              stream filtered logs
+  ./healthfire logcat-pid          stream logs from the app process only
+  ./healthfire logcat-all          stream everything (noisy)
+  ./healthfire uninstall           uninstall from the phone
+  ./healthfire disconnect          disconnect all adb devices
+  ./healthfire down                stop Docker Compose
 EOF
     ;;
 esac

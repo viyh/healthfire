@@ -31,16 +31,21 @@ works against anyone's own Firebase / GCP project.
 
 ## Building
 
-The build runs entirely in Docker - you only need a Docker-compatible runtime
-(Docker Engine, Colima, Rancher Desktop, OrbStack, Podman with the docker
-shim). The `./healthfire` wrapper handles everything else:
+The build runs in Docker, so no JDK or Android SDK is needed on the host -
+just a Docker-compatible runtime (Docker Engine, Colima, Rancher Desktop,
+OrbStack, Podman with the docker shim). Installing onto a phone also needs
+`adb` on the host (Android platform-tools): a Docker container cannot reach a
+LAN-attached device, the host can.
+
+The `./healthfire` wrapper drives both:
 
 ```
-./healthfire build         build the debug APK
-./healthfire run           build, install and launch on a paired device
-./healthfire release       build the release APK
-./healthfire logcat        stream filtered logs
-./healthfire               list all commands
+./healthfire build              build the debug APK (Docker)
+./healthfire connect <ip:port>  connect to the phone (Wireless debugging)
+./healthfire run                build, install and launch on the phone
+./healthfire release            build the release APK (Docker)
+./healthfire logcat             stream filtered logs
+./healthfire                    list all commands
 ```
 
 APKs land in `app/build/outputs/apk/`.
