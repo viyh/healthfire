@@ -99,4 +99,11 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Serialization and reflection (generic record-to-JSON payload)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.21")
+
+    // Unit tests
+    testImplementation("junit:junit:4.13.2")
 }

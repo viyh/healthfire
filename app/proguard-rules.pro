@@ -1,5 +1,7 @@
 # healthfire R8 / ProGuard rules.
 #
-# Release builds run R8 (isMinifyEnabled = true). Keep rules for the Health
-# Connect record classes inspected by the reflection-based payload serializer
-# are added in the serializer milestone, alongside that code.
+# The payload serializer (hc/RecordSerializer.kt) reflects over Health Connect
+# record and unit classes with kotlin-reflect. Keep their members so R8 does
+# not rename or strip the properties it reads.
+-keep class androidx.health.connect.client.records.** { *; }
+-keep class androidx.health.connect.client.units.** { *; }
