@@ -1,0 +1,24 @@
+name: healthfire
+
+services:
+  build:
+    build: .
+    image: healthfire-android:latest
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - gradle-cache:/root/.gradle
+      - adb-keys:/root/.android
+    command: gradle --no-daemon assembleDebug
+
+  tools:
+    image: healthfire-android:latest
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - adb-keys:/root/.android
+    command: tail -f /dev/null
+
+volumes:
+  gradle-cache:
+  adb-keys:

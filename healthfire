@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# healthfire - dev workflow wrapper. Everything runs in Docker; nothing is
+# installed on the host. Run ./healthfire with no arguments for the full list.
+set -euo pipefail
+
+APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+RELEASE_APK_PATH="app/build/outputs/apk/release/app-release.apk"
+PKG="io.github.viyh.healthfire"
+
+tools_up() {
+  if ! docker compose ps --services --filter "status=running" | grep -qx tools; then
+    docker compose up -d tools >/dev/null
+  fi
+}
+
+tools_exec() {
+  tools_up
+  docker compose exec tools "$@"
+}
+
+case "${1:-help}" in
+  build)
+    docker compose run --rm build
+    ;;
+  release)
+    docker compose run --rm build gradle --no-daemon assembleRelease
+    ls -lh "$RELEASE_APK_PATH"
+    ;;
+  release-install)
+    tools_exec adb install -r "$RELEASE_APK_PATH"
+    ;;
+  release-run)
+    docker compose run --rm build gradle --no-daemon assembleRelease
+    tools_exec adb install -r "$RELEASE_APK_PATH"
+    tools_exec adb shell am start -n "$PKG/.MainActivity"
+    ;;
+  test)
+    docker compose run --rm build gradle --no-daemon testDebugUnitTest
+    ;;
+  pair)
+    # usage: ./healthfire pair <host:port> <code>
+    tools_exec adb pair "$2" "$3"
+    ;;
+  connect)
+    # usage: ./healthfire connect <host:port>
+    tools_exec adb connect "$2"
+    ;;
+  devices)
+    tools_exec adb devices
+    ;;
+  install)
+    tools_exec adb install -r "$APK_PATH"
+    ;;
+  uninstall)
+    tools_exec adb uninstall "$PKG" || true
+    ;;
+  start)
+    tools_exec adb shell am start -n "$PKG/.MainActivity"
+    ;;
+  run)
+    docker compose run --rm build
+    tools_exec adb install -r "$APK_PATH"
+    tools_exec adb shell am start -n "$PKG/.MainActivity"
+    ;;
+  logcat)
+    tools_exec adb logcat -v color \
+      Healthfire:V \
+      HealthConnect:W HealthConnectClient:W \
+      WM-WorkerWrapper:I WorkManager:I \
+      Firebase:W FirebaseStorage:W FirebaseAuth:W \
+      AndroidRuntime:E System.err:W \
+      "*:S"
+    ;;
+  logcat-pid)
+    pid=$(docker compose exec -T tools adb shell pidof "$PKG" | tr -d '\r\n')
+    if [ -z "$pid" ]; then
+      echo "App not running. Launch it first (./healthfire start)."
+      exit 1
+    fi
+    tools_exec adb logcat -v color --pid "$pid"
+    ;;
+  logcat-all)
+    tools_exec adb logcat -v color
+    ;;
+  shell)
+    tools_exec bash
+    ;;
+  clean)
+    docker compose run --rm build gradle --no-daemon clean
+    ;;
+  down)
+    docker compose down
+    ;;
+  *)
+    cat <<EOF
+healthfire dev workflow
+
+Setup (once):
+  ./healthfire build                build the Docker image and debug APK
+  ./healthfire pair HOST:PORT CODE  pair with your phone (Wireless Debugging)
+  ./healthfire connect HOST:PORT    connect to a paired phone
+
+Daily:
+  ./healthfire run                  build + install + launch (debug)
+  ./healthfire release-run          build + install + launch (release)
+  ./healthfire build                build debug APK only
+  ./healthfire release              build release APK only
+  ./healthfire test                 run JVM unit tests
+  ./healthfire install              install last-built debug APK
+  ./healthfire release-install      install last-built release APK
+  ./healthfire start                launch the app on the device
+  ./healthfire logcat               stream filtered logs
+  ./healthfire logcat-pid           stream logs from the app process only
+  ./healthfire logcat-all           stream everything (noisy)
+  ./healthfire devices              list connected devices
+  ./healthfire shell                bash shell in the tools container
+  ./healthfire uninstall            uninstall from the device
+  ./healthfire clean                gradle clean
+  ./healthfire down                 stop the tools container
+EOF
+    ;;
+esac

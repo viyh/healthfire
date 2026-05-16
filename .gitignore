@@ -1,0 +1,31 @@
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Gradle / Kotlin / build
+.gradle/
+build/
+**/build/
+.kotlin/
+local.properties
+
+# Cloud config and credentials - NEVER commit
+google-services.json
+**/google-services.json
+*.keystore
+*.jks
+*-service-account.json
+service-account*.json
+.env
+.env.*
+
+# Tooling / IDE
+.idea/
+*.iml
+.claude/
+.DS_Store
+
+# Logs
+*.log
