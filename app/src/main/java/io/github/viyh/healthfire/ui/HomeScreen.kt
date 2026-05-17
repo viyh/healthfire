@@ -72,7 +72,7 @@ fun HomeScreen(state: MainUiState, viewModel: MainViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("healthfire", style = MaterialTheme.typography.headlineMedium)
+                Text("HealthFire", style = MaterialTheme.typography.headlineMedium)
                 TextButton(onClick = viewModel::refresh) { Text("Refresh") }
             }
 

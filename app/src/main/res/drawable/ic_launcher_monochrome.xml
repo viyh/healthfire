@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- healthfire mark: two interlocking stadium rings forming a heart, in
-     Firebase colours. Source: design/icon.svg. The amber ring is drawn,
-     the red ring over it, then the amber ring again at 40% so the
-     crossings tint orange. The outer group scales the mark to 0.70 and
-     nudges it down 2 so it sits centred in the safe zone (66dp circle). -->
+<!-- Themed-icon (Android 13+) layer: the healthfire mark as a flat
+     single-colour silhouette; the system applies its own tint. Scaled
+     0.70 and nudged down 2 to match the foreground. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -22,7 +20,7 @@
             <path
                 android:pathData="M-12.3,-16.5 L12.3,-16.5 A16.5,16.5 0 0 1 12.3,16.5 L-12.3,16.5 A16.5,16.5 0 0 1 -12.3,-16.5 Z"
                 android:fillColor="#00000000"
-                android:strokeColor="#FFC400"
+                android:strokeColor="#000000"
                 android:strokeWidth="7" />
         </group>
         <group
@@ -32,19 +30,8 @@
             <path
                 android:pathData="M-12.3,-16.5 L12.3,-16.5 A16.5,16.5 0 0 1 12.3,16.5 L-12.3,16.5 A16.5,16.5 0 0 1 -12.3,-16.5 Z"
                 android:fillColor="#00000000"
-                android:strokeColor="#DD2C00"
+                android:strokeColor="#000000"
                 android:strokeWidth="7" />
-        </group>
-        <group
-            android:translateX="62.7"
-            android:translateY="54"
-            android:rotation="-45">
-            <path
-                android:pathData="M-12.3,-16.5 L12.3,-16.5 A16.5,16.5 0 0 1 12.3,16.5 L-12.3,16.5 A16.5,16.5 0 0 1 -12.3,-16.5 Z"
-                android:fillColor="#00000000"
-                android:strokeColor="#FFC400"
-                android:strokeWidth="7"
-                android:strokeAlpha="0.4" />
         </group>
     </group>
 </vector>

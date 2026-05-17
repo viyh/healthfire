@@ -40,13 +40,13 @@ fun HealthConnectUnavailableScreen(availability: HcAvailability) {
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("healthfire", style = MaterialTheme.typography.headlineMedium)
+            Text("HealthFire", style = MaterialTheme.typography.headlineMedium)
             Text(
                 text = when (availability) {
                     HcAvailability.UPDATE_REQUIRED ->
-                        "Health Connect needs to be updated before healthfire can run."
+                        "Health Connect needs to be updated before HealthFire can run."
                     else ->
-                        "This device does not support Health Connect, so healthfire cannot run."
+                        "This device does not support Health Connect, so HealthFire cannot run."
                 },
                 style = MaterialTheme.typography.bodyLarge,
             )

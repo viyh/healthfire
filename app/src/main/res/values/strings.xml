@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">healthfire</string>
+    <string name="app_name">HealthFire</string>
 
     <!-- Sync notification (shown while the initial backfill runs). -->
     <string name="sync_channel_name">Health Connect sync</string>

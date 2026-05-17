@@ -48,7 +48,7 @@ fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("healthfire", style = MaterialTheme.typography.headlineMedium)
+            Text("HealthFire", style = MaterialTheme.typography.headlineMedium)
             Text(
                 "Three steps to start exporting your Health Connect data to cloud " +
                     "storage that you own.",
@@ -81,7 +81,7 @@ fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
             SetupStep(
                 number = 3,
                 title = "Grant Health Connect access",
-                description = "Choose which health record types healthfire may read and export.",
+                description = "Choose which health record types HealthFire may read and export.",
                 done = state.permissionsGranted,
                 actionLabel = "Grant permissions",
                 enabled = !state.busy && state.signedIn,

@@ -38,11 +38,11 @@ class PermissionsRationaleActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = "How healthfire uses your health data",
+                            text = "How HealthFire uses your health data",
                             style = MaterialTheme.typography.titleLarge,
                         )
                         Text(
-                            text = "healthfire reads the record types you grant from Health " +
+                            text = "HealthFire reads the record types you grant from Health " +
                                 "Connect and exports them to a cloud storage bucket that you own " +
                                 "and configure. Your data is never sent to the app's authors and " +
                                 "is not shared with anyone else. You can revoke any permission at " +
