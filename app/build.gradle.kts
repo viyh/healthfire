@@ -62,13 +62,14 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
+            // Minification stays off. The app leans on reflection in several
+            // places (the payload serializer, WorkManager worker instantiation,
+            // view models), where R8 renaming is a runtime-failure risk that is
+            // tedious to debug. For a sideloaded build the size saving is not
+            // worth that risk; revisit with full keep rules if it ever matters.
+            isMinifyEnabled = false
             isShrinkResources = false
             signingConfig = signingConfigs.getByName("debugShared")
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
         }
     }
 
