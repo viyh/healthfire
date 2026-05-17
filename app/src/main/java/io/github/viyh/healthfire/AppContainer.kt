@@ -5,6 +5,8 @@ import io.github.viyh.healthfire.firebase.AuthManager
 import io.github.viyh.healthfire.firebase.FirebaseConfigStore
 import io.github.viyh.healthfire.firebase.StorageUploader
 import io.github.viyh.healthfire.hc.HealthConnectGateway
+import io.github.viyh.healthfire.sync.SyncEngine
+import io.github.viyh.healthfire.sync.SyncStateStore
 
 /**
  * Manual dependency container holding the app-scoped singletons. Created once
@@ -15,4 +17,12 @@ class AppContainer(context: Context) {
     val firebaseConfigStore: FirebaseConfigStore = FirebaseConfigStore(context)
     val authManager: AuthManager = AuthManager(firebaseConfigStore)
     val storageUploader: StorageUploader = StorageUploader()
+    val syncStateStore: SyncStateStore = SyncStateStore(context)
+    val syncEngine: SyncEngine = SyncEngine(
+        gateway = healthConnectGateway,
+        authManager = authManager,
+        uploader = storageUploader,
+        stateStore = syncStateStore,
+        appVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.GIT_REVISION}",
+    )
 }
