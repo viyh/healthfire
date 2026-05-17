@@ -105,6 +105,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.21")
 
+    // Firebase, initialized at runtime from imported configuration
+    implementation(platform("com.google.firebase:firebase-bom:34.13.0"))
+    implementation("com.google.firebase:firebase-common")
+
+    // Local persistence
+    implementation("androidx.datastore:datastore-preferences:1.1.7")
+
     // Unit tests
     testImplementation("junit:junit:4.13.2")
 }
