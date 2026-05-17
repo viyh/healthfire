@@ -6,6 +6,7 @@ import io.github.viyh.healthfire.firebase.FirebaseConfigStore
 import io.github.viyh.healthfire.firebase.StorageUploader
 import io.github.viyh.healthfire.hc.HealthConnectGateway
 import io.github.viyh.healthfire.sync.SyncEngine
+import io.github.viyh.healthfire.sync.SyncMetricsStore
 import io.github.viyh.healthfire.sync.SyncStateStore
 
 /**
@@ -18,11 +19,13 @@ class AppContainer(context: Context) {
     val authManager: AuthManager = AuthManager(firebaseConfigStore)
     val storageUploader: StorageUploader = StorageUploader()
     val syncStateStore: SyncStateStore = SyncStateStore(context)
+    val syncMetricsStore: SyncMetricsStore = SyncMetricsStore(context)
     val syncEngine: SyncEngine = SyncEngine(
         gateway = healthConnectGateway,
         authManager = authManager,
         uploader = storageUploader,
         stateStore = syncStateStore,
+        metricsStore = syncMetricsStore,
         appVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.GIT_REVISION}",
     )
 }

@@ -27,6 +27,7 @@ class SyncEngine(
     private val authManager: AuthManager,
     private val uploader: StorageUploader,
     private val stateStore: SyncStateStore,
+    private val metricsStore: SyncMetricsStore,
     private val appVersion: String,
 ) {
 
@@ -51,7 +52,11 @@ class SyncEngine(
                 incremental(token, grantedTypes, personUid, exportedAt)
             }
         }.fold(
-            onSuccess = { SyncResult.Success(it) },
+            onSuccess = { byType ->
+                // Metrics are best-effort; a metrics-write failure must not fail the sync.
+                runCatching { metricsStore.record(byType, exportedAt) }
+                SyncResult.Success(byType.values.sumOf { it.records })
+            },
             onFailure = { SyncResult.Failure(it.message ?: "Sync failed.") },
         )
     }
@@ -61,12 +66,12 @@ class SyncEngine(
         types: List<KClass<out Record>>,
         personUid: String,
         exportedAt: Instant,
-    ): Int {
+    ): Map<String, TypeMetrics> {
         val token = gateway.getChangesToken(types.toSet())
-        var exported = 0
+        val totals = HashMap<String, TypeMetrics>()
         for (type in types) {
             gateway.readPaged(type, BACKFILL_START, exportedAt) { page ->
-                exported += exportRecords(page, personUid, exportedAt)
+                totals.add(exportRecords(page, personUid, exportedAt))
             }
         }
         stateStore.save(
@@ -76,7 +81,7 @@ class SyncEngine(
                 backfillComplete = true,
             ),
         )
-        return exported
+        return totals
     }
 
     /** Later runs: export the records Health Connect reports as changed. */
@@ -85,13 +90,13 @@ class SyncEngine(
         types: List<KClass<out Record>>,
         personUid: String,
         exportedAt: Instant,
-    ): Int {
+    ): Map<String, TypeMetrics> {
         val changes = gateway.changesSince(token)
         if (changes.tokenExpired) {
             // The token aged out (unused for more than 30 days); re-baseline.
             return backfill(types, personUid, exportedAt)
         }
-        val exported = exportRecords(changes.upsertedRecords, personUid, exportedAt)
+        val totals = exportRecords(changes.upsertedRecords, personUid, exportedAt)
         stateStore.save(
             SyncState(
                 changesToken = changes.nextToken,
@@ -99,23 +104,38 @@ class SyncEngine(
                 backfillComplete = true,
             ),
         )
-        return exported
+        return totals
     }
 
-    /** Envelopes, batches and uploads one set of records. */
+    /**
+     * Envelopes, batches and uploads one set of records, returning the
+     * per-record-type tally (files, datapoints, bytes) of what was uploaded.
+     */
     private suspend fun exportRecords(
         records: List<Record>,
         personUid: String,
         exportedAt: Instant,
-    ): Int {
-        if (records.isEmpty()) return 0
+    ): Map<String, TypeMetrics> {
+        if (records.isEmpty()) return emptyMap()
         val envelopes = records.map {
             EnvelopeMapper.toEnvelope(it, personUid, exportedAt, appVersion)
         }
+        val byType = HashMap<String, TypeMetrics>()
         JsonlBatcher.batch(envelopes).forEach { file ->
             uploader.upload(file, personUid, exportedAt)
+            val stat = TypeMetrics(
+                files = 1,
+                records = file.recordCount,
+                bytes = file.jsonl.toByteArray(Charsets.UTF_8).size.toLong(),
+            )
+            byType[file.recordType] = (byType[file.recordType] ?: TypeMetrics()) + stat
         }
-        return records.size
+        return byType
+    }
+
+    /** Accumulates [other]'s per-type tallies into this map in place. */
+    private fun MutableMap<String, TypeMetrics>.add(other: Map<String, TypeMetrics>) {
+        for ((type, m) in other) this[type] = (this[type] ?: TypeMetrics()) + m
     }
 
     private fun rfc3339(instant: Instant): String =
