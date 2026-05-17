@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="design/icon.png" alt="HealthFire" width="120">
-</p>
+<img src="design/logo.png" alt="HealthFire" width="110">
 
 # healthfire
 
