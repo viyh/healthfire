@@ -9,7 +9,6 @@ import java.time.Instant
 class StorageUploaderTest {
 
     private val file = JsonlFile(
-        dt = "2026-05-15",
         recordType = "blood_pressure",
         recordCount = 2,
         jsonl = "{}\n{}\n",
@@ -24,7 +23,7 @@ class StorageUploaderTest {
         )
         assertTrue(
             path,
-            path.startsWith("hc/person_uid=uid-abc/dt=2026-05-15/record_type=blood_pressure/"),
+            path.startsWith("hc/person_uid=uid-abc/record_type=blood_pressure/"),
         )
         assertTrue(path, path.endsWith(".jsonl"))
         assertTrue(path, path.contains("2026-05-15T19-00-03Z__"))

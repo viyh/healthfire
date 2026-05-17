@@ -10,7 +10,7 @@ import java.util.UUID
 
 /**
  * Uploads batched JSON Lines to Cloud Storage for Firebase at the contract
- * path: `hc/person_uid=<uid>/dt=<date>/record_type=<type>/<exported_at>__<uuid>.jsonl`.
+ * path: `hc/person_uid=<uid>/record_type=<type>/<exported_at>__<uuid>.jsonl`.
  */
 class StorageUploader {
 
@@ -38,8 +38,8 @@ class StorageUploader {
             exportedAt: Instant,
         ): String {
             val stamp = DateTimeFormatter.ISO_INSTANT.format(exportedAt).replace(':', '-')
-            return "hc/person_uid=$personUid/dt=${file.dt}" +
-                "/record_type=${file.recordType}/${stamp}__${UUID.randomUUID()}.jsonl"
+            return "hc/person_uid=$personUid/record_type=${file.recordType}" +
+                "/${stamp}__${UUID.randomUUID()}.jsonl"
         }
     }
 }

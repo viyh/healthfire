@@ -1,12 +1,20 @@
 package io.github.viyh.healthfire.sync
 
+import android.util.Log
 import androidx.health.connect.client.records.Record
 import io.github.viyh.healthfire.envelope.EnvelopeMapper
-import io.github.viyh.healthfire.envelope.JsonlBatcher
+import io.github.viyh.healthfire.envelope.JsonlFile
+import io.github.viyh.healthfire.envelope.JsonlWriter
 import io.github.viyh.healthfire.firebase.AuthManager
 import io.github.viyh.healthfire.firebase.StorageUploader
 import io.github.viyh.healthfire.hc.HcAvailability
 import io.github.viyh.healthfire.hc.HealthConnectGateway
+import io.github.viyh.healthfire.hc.RecordTypes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import kotlin.reflect.KClass
@@ -23,9 +31,31 @@ sealed interface SyncResult {
     data class Failure(val reason: String, val retryable: Boolean) : SyncResult
 }
 
+/** Live progress of the running sync, for the UI to observe. */
+sealed interface SyncProgress {
+    /** No sync is running. */
+    data object Idle : SyncProgress
+
+    /**
+     * A sync is in progress. For a backfill, [recordTypesDone]/[recordTypesTotal]
+     * and [currentType] track the per-type sweep; [currentDate] is the latest
+     * record date reached. The counts move with every record.
+     */
+    data class Running(
+        val backfill: Boolean,
+        val recordTypesTotal: Int = 0,
+        val recordTypesDone: Int = 0,
+        val currentType: String? = null,
+        val currentDate: String? = null,
+        val recordsExported: Int = 0,
+        val filesUploaded: Int = 0,
+    ) : SyncProgress
+}
+
 /**
  * Orchestrates a sync: read Health Connect, wrap each record in an envelope,
- * batch to JSON Lines, and upload. The first run backfills history and takes a
+ * and upload it as JSON Lines - one file per record type (large types split
+ * into a few size-capped files). The first run backfills history and takes a
  * changes token; later runs export only what Health Connect reports as changed.
  */
 class SyncEngine(
@@ -37,7 +67,12 @@ class SyncEngine(
     private val appVersion: String,
 ) {
 
-    /** Runs one sync and returns its outcome. Never throws. */
+    private val _progress = MutableStateFlow<SyncProgress>(SyncProgress.Idle)
+
+    /** Live progress of the current sync, or [SyncProgress.Idle] when none runs. */
+    val progress: StateFlow<SyncProgress> = _progress.asStateFlow()
+
+    /** Runs one sync and returns its outcome. Never throws, except on cancellation. */
     suspend fun sync(): SyncResult {
         if (gateway.availability() != HcAvailability.AVAILABLE) {
             return SyncResult.Failure("Health Connect is not available.", retryable = false)
@@ -50,36 +85,85 @@ class SyncEngine(
         }
 
         val exportedAt = Instant.now()
-        val token = stateStore.load().changesToken
-        return runCatching {
-            if (token == null) {
-                backfill(grantedTypes, personUid, exportedAt)
-            } else {
-                incremental(token, grantedTypes, personUid, exportedAt)
-            }
-        }.fold(
-            onSuccess = { byType ->
-                // Metrics are best-effort; a metrics-write failure must not fail the sync.
-                runCatching { metricsStore.record(byType, exportedAt) }
-                SyncResult.Success(byType.values.sumOf { it.records })
-            },
-            onFailure = { SyncResult.Failure(it.message ?: "Sync failed.", retryable = true) },
+        val state = stateStore.load()
+        Log.i(TAG, "sync: starting (backfill=${state.changesToken == null})")
+        _progress.value = SyncProgress.Running(
+            backfill = state.changesToken == null,
+            recordTypesTotal = if (state.changesToken == null) grantedTypes.size else 0,
         )
+        return try {
+            runCatching {
+                val token = state.changesToken
+                if (token == null) {
+                    backfill(state, grantedTypes, personUid, exportedAt)
+                } else {
+                    incremental(token, grantedTypes, personUid, exportedAt)
+                }
+            }.fold(
+                onSuccess = { byType ->
+                    val records = byType.values.sumOf { it.records }
+                    Log.i(TAG, "sync: complete, $records datapoints exported")
+                    SyncResult.Success(records)
+                },
+                onFailure = { error ->
+                    // A Stop request cancels the coroutine; let that unwind.
+                    if (error is CancellationException) throw error
+                    Log.e(TAG, "sync: failed", error)
+                    SyncResult.Failure(error.message ?: "Sync failed.", retryable = true)
+                },
+            )
+        } finally {
+            _progress.value = SyncProgress.Idle
+        }
     }
 
-    /** First run: take a changes token, then export all history page by page. */
+    /**
+     * Exports all history, one record type at a time. Resumable: the changes
+     * token is taken once and each completed type is checkpointed - its sync
+     * state and its metrics - so an interrupted run picks up from the next
+     * unexported type and the recorded totals stay accurate.
+     */
     private suspend fun backfill(
+        state: SyncState,
         types: List<KClass<out Record>>,
         personUid: String,
         exportedAt: Instant,
     ): Map<String, TypeMetrics> {
-        val token = gateway.getChangesToken(types.toSet())
+        // Keep the original token across resumes so the first incremental sync
+        // still catches whatever changed while the backfill was running.
+        val token = state.backfillToken ?: gateway.getChangesToken(types.toSet())
+        if (state.backfillToken == null) {
+            stateStore.save(SyncState(backfillToken = token))
+        }
+        val doneTypes = state.backfillDoneTypes.toMutableSet()
         val totals = HashMap<String, TypeMetrics>()
-        for (type in types) {
-            gateway.readPaged(type, BACKFILL_START, exportedAt) { page ->
-                totals.add(exportRecords(page, personUid, exportedAt))
+        types.forEachIndexed { index, type ->
+            val typeName = RecordTypes.recordTypeName(type)
+            updateProgress {
+                it.copy(recordTypesDone = index, currentType = typeName, currentDate = null)
+            }
+            if (typeName in doneTypes) {
+                Log.i(TAG, "backfill: $typeName (${index + 1}/${types.size}) already done")
+            } else {
+                Log.i(TAG, "backfill: reading $typeName (${index + 1}/${types.size})")
+                val typeMetrics = exportType(type, typeName, personUid, exportedAt)
+                Log.i(
+                    TAG,
+                    "backfill: $typeName done (${typeMetrics.records} records, " +
+                        "${typeMetrics.files} files)",
+                )
+                if (typeMetrics.records > 0) {
+                    runCatching { metricsStore.record(mapOf(typeName to typeMetrics), exportedAt) }
+                }
+                totals[typeName] = typeMetrics
+                doneTypes.add(typeName)
+                // Checkpoint so an interrupted run resumes from the next type.
+                stateStore.save(
+                    SyncState(backfillToken = token, backfillDoneTypes = doneTypes.toList()),
+                )
             }
         }
+        updateProgress { it.copy(recordTypesDone = types.size, currentType = null) }
         stateStore.save(
             SyncState(
                 changesToken = token,
@@ -88,6 +172,25 @@ class SyncEngine(
             ),
         )
         return totals
+    }
+
+    /** Reads one record type's full history and uploads it as size-capped files. */
+    private suspend fun exportType(
+        type: KClass<out Record>,
+        typeName: String,
+        personUid: String,
+        exportedAt: Instant,
+    ): TypeMetrics {
+        val writer = JsonlWriter()
+        val tally = HashMap<String, TypeMetrics>()
+        gateway.readPaged(type, BACKFILL_START, exportedAt) { page ->
+            for (record in page) {
+                exportRecord(record, writer, personUid, exportedAt, tally)
+            }
+            Log.i(TAG, "backfill: $typeName +${page.size}")
+        }
+        writer.flush().forEach { uploadFile(it, personUid, exportedAt, tally) }
+        return tally[typeName] ?: TypeMetrics()
     }
 
     /** Later runs: export the records Health Connect reports as changed. */
@@ -99,10 +202,20 @@ class SyncEngine(
     ): Map<String, TypeMetrics> {
         val changes = gateway.changesSince(token)
         if (changes.tokenExpired) {
-            // The token aged out (unused for more than 30 days); re-baseline.
-            return backfill(types, personUid, exportedAt)
+            // The token aged out (unused for more than 30 days); re-baseline
+            // with a fresh backfill.
+            Log.i(TAG, "incremental: token expired, re-baselining")
+            _progress.value = SyncProgress.Running(backfill = true, recordTypesTotal = types.size)
+            return backfill(SyncState(), types, personUid, exportedAt)
         }
-        val totals = exportRecords(changes.upsertedRecords, personUid, exportedAt)
+        Log.i(TAG, "incremental: ${changes.upsertedRecords.size} changed records")
+        val writer = JsonlWriter()
+        val totals = HashMap<String, TypeMetrics>()
+        for (record in changes.upsertedRecords) {
+            exportRecord(record, writer, personUid, exportedAt, totals)
+        }
+        writer.flush().forEach { uploadFile(it, personUid, exportedAt, totals) }
+        runCatching { metricsStore.record(totals, exportedAt) }
         stateStore.save(
             SyncState(
                 changesToken = changes.nextToken,
@@ -113,41 +226,57 @@ class SyncEngine(
         return totals
     }
 
-    /**
-     * Envelopes, batches and uploads one set of records, returning the
-     * per-record-type tally (files, datapoints, bytes) of what was uploaded.
-     */
-    private suspend fun exportRecords(
-        records: List<Record>,
+    /** Envelopes one record into [writer]; uploads and tallies any file it completes. */
+    private suspend fun exportRecord(
+        record: Record,
+        writer: JsonlWriter,
         personUid: String,
         exportedAt: Instant,
-    ): Map<String, TypeMetrics> {
-        if (records.isEmpty()) return emptyMap()
-        val envelopes = records.map {
-            EnvelopeMapper.toEnvelope(it, personUid, exportedAt, appVersion)
-        }
-        val byType = HashMap<String, TypeMetrics>()
-        JsonlBatcher.batch(envelopes).forEach { file ->
-            uploader.upload(file, personUid, exportedAt)
-            val stat = TypeMetrics(
-                files = 1,
-                records = file.recordCount,
-                bytes = file.jsonl.toByteArray(Charsets.UTF_8).size.toLong(),
+        tally: MutableMap<String, TypeMetrics>,
+    ) {
+        val envelope = EnvelopeMapper.toEnvelope(record, personUid, exportedAt, appVersion)
+        writer.add(envelope)?.let { uploadFile(it, personUid, exportedAt, tally) }
+        updateProgress {
+            it.copy(
+                recordsExported = it.recordsExported + 1,
+                currentDate = laterDate(it.currentDate, envelope.recorded_at),
             )
-            byType[file.recordType] = (byType[file.recordType] ?: TypeMetrics()) + stat
         }
-        return byType
     }
 
-    /** Accumulates [other]'s per-type tallies into this map in place. */
-    private fun MutableMap<String, TypeMetrics>.add(other: Map<String, TypeMetrics>) {
-        for ((type, m) in other) this[type] = (this[type] ?: TypeMetrics()) + m
+    /** Uploads [file], adds it to [tally], and advances the file count. */
+    private suspend fun uploadFile(
+        file: JsonlFile,
+        personUid: String,
+        exportedAt: Instant,
+        tally: MutableMap<String, TypeMetrics>,
+    ) {
+        uploader.upload(file, personUid, exportedAt)
+        val bytes = file.jsonl.toByteArray(Charsets.UTF_8).size.toLong()
+        tally[file.recordType] = (tally[file.recordType] ?: TypeMetrics()) +
+            TypeMetrics(files = 1, records = file.recordCount, bytes = bytes)
+        updateProgress { it.copy(filesUploaded = it.filesUploaded + 1) }
+    }
+
+    /** Atomically applies [transform] to the progress state while a sync runs. */
+    private fun updateProgress(transform: (SyncProgress.Running) -> SyncProgress.Running) {
+        _progress.update { current ->
+            if (current is SyncProgress.Running) transform(current) else current
+        }
+    }
+
+    /** The later of a current `yyyy-MM-dd` and the date inside RFC 3339 [rfc3339]. */
+    private fun laterDate(current: String?, rfc3339: String): String {
+        val date = rfc3339.substringBefore('T')
+        return if (current == null || date > current) date else current
     }
 
     private fun rfc3339(instant: Instant): String =
         DateTimeFormatter.ISO_INSTANT.format(instant)
 
     private companion object {
+        const val TAG = "Healthfire"
+
         /** Backfill horizon - earlier than typical consumer health-tracker data. */
         val BACKFILL_START: Instant = Instant.parse("2015-01-01T00:00:00Z")
     }

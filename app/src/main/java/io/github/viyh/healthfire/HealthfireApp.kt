@@ -5,12 +5,14 @@ import android.util.Log
 import io.github.viyh.healthfire.firebase.FirebaseRuntime
 import io.github.viyh.healthfire.sync.SyncNotifications
 import io.github.viyh.healthfire.sync.SyncScheduler
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 /**
- * Application entry point. Owns the [AppContainer] of app-scoped dependencies,
- * brings up Firebase from a previously imported config, and schedules the
- * recurring background sync.
+ * Application entry point. Owns the [AppContainer] of app-scoped dependencies
+ * and brings up Firebase from a previously imported config. Sync is never
+ * started from here - it runs only on an explicit request, or on the
+ * background schedule once the user turns that on.
  */
 class HealthfireApp : Application() {
 
@@ -22,7 +24,7 @@ class HealthfireApp : Application() {
         container = AppContainer(this)
         initializeFirebaseIfConfigured()
         SyncNotifications.ensureChannel(this)
-        SyncScheduler.ensurePeriodicSync(this)
+        reconcileAutoSync()
     }
 
     /** Initializes Firebase from a previously imported config, if there is one. */
@@ -30,5 +32,18 @@ class HealthfireApp : Application() {
         val config = runBlocking { container.firebaseConfigStore.load() } ?: return
         runCatching { FirebaseRuntime.initialize(this, config) }
             .onFailure { Log.e("Healthfire", "Firebase initialization failed", it) }
+    }
+
+    /**
+     * Brings WorkManager's recurring sync in line with the saved preference, so
+     * a schedule left over from a previous install does not run unbidden.
+     */
+    private fun reconcileAutoSync() {
+        val enabled = runBlocking { container.syncSettingsStore.autoSyncEnabled.first() }
+        if (enabled) {
+            SyncScheduler.enablePeriodicSync(this)
+        } else {
+            SyncScheduler.disablePeriodicSync(this)
+        }
     }
 }

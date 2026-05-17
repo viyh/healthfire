@@ -12,6 +12,7 @@ import io.github.viyh.healthfire.firebase.FirebaseRuntime
 import io.github.viyh.healthfire.hc.HcAvailability
 import io.github.viyh.healthfire.hc.RecordTypes
 import io.github.viyh.healthfire.sync.MetricsLog
+import io.github.viyh.healthfire.sync.SyncProgress
 import io.github.viyh.healthfire.sync.SyncScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +39,8 @@ data class MainUiState(
     val lastSyncAt: String? = null,
     val backfillComplete: Boolean = false,
     val metrics: MetricsLog = MetricsLog(),
+    val syncProgress: SyncProgress = SyncProgress.Idle,
+    val autoSyncEnabled: Boolean = false,
 ) {
     val healthConnectReady: Boolean get() = availability == HcAvailability.AVAILABLE
     val permissionsGranted: Boolean get() = grantedTypeCount > 0
@@ -62,6 +65,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refresh()
+        observeSyncProgress()
+        observeAutoSync()
+    }
+
+    /** Mirrors the sync engine's live progress into the UI state. */
+    private fun observeSyncProgress() {
+        viewModelScope.launch {
+            var wasRunning = false
+            var typesDone = 0
+            container.syncEngine.progress.collect { progress ->
+                _uiState.update { it.copy(syncProgress = progress) }
+                val running = progress is SyncProgress.Running
+                // When a sync finishes, pull the fresh sync state and metrics.
+                if (wasRunning && !running) refresh()
+                // Each finished record type writes its metrics; reload as it goes.
+                val done = (progress as? SyncProgress.Running)?.recordTypesDone ?: 0
+                if (done > typesDone) refreshMetrics()
+                typesDone = done
+                wasRunning = running
+            }
+        }
+    }
+
+    /** Reloads just the export metrics, e.g. as a backfill finishes each type. */
+    private fun refreshMetrics() {
+        viewModelScope.launch {
+            val metrics = runCatching { container.syncMetricsStore.load() }
+                .getOrDefault(MetricsLog())
+            _uiState.update { it.copy(metrics = metrics) }
+        }
+    }
+
+    /** Mirrors the saved background-sync preference into the UI state. */
+    private fun observeAutoSync() {
+        viewModelScope.launch {
+            container.syncSettingsStore.autoSyncEnabled.collect { enabled ->
+                _uiState.update { it.copy(autoSyncEnabled = enabled) }
+            }
+        }
     }
 
     /** Re-derives the whole UI state. Safe to call on every resume. */
@@ -151,9 +193,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Queues an immediate sync through WorkManager. */
     fun syncNow() {
+        if (_uiState.value.syncProgress is SyncProgress.Running) return
         SyncScheduler.syncNow(app)
+        // Optimistic running state so the UI reacts on tap; the worker's real
+        // progress replaces it once the sync starts a moment later.
         _uiState.update {
-            it.copy(message = "Sync queued. Tap Refresh in a moment to see results.")
+            it.copy(syncProgress = SyncProgress.Running(backfill = false), message = null)
+        }
+    }
+
+    /** Stops the sync in progress. A backfill resumes from its checkpoint. */
+    fun stopSync() {
+        SyncScheduler.stopSync(app)
+        _uiState.update { it.copy(syncProgress = SyncProgress.Idle) }
+    }
+
+    /** Turns the recurring background sync on or off. */
+    fun setAutoSync(enabled: Boolean) {
+        viewModelScope.launch {
+            container.syncSettingsStore.setAutoSyncEnabled(enabled)
+            if (enabled) {
+                SyncScheduler.enablePeriodicSync(app)
+            } else {
+                SyncScheduler.disablePeriodicSync(app)
+            }
+        }
+    }
+
+    /** Clears the sync checkpoint so the next sync re-exports the full history. */
+    fun startOver() {
+        if (_uiState.value.syncProgress is SyncProgress.Running) return
+        viewModelScope.launch {
+            container.syncStateStore.clear()
+            refresh()
         }
     }
 

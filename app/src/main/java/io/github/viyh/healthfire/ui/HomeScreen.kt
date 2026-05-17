@@ -3,6 +3,7 @@
 package io.github.viyh.healthfire.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,25 +11,33 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
@@ -36,9 +45,11 @@ import io.github.viyh.healthfire.BuildConfig
 import io.github.viyh.healthfire.MainUiState
 import io.github.viyh.healthfire.MainViewModel
 import io.github.viyh.healthfire.sync.MetricsWindow
+import io.github.viyh.healthfire.sync.SyncProgress
 import io.github.viyh.healthfire.sync.TypeMetrics
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlinx.coroutines.delay
 
 /** Home/status screen: sync state, exported-data metrics, and the account. */
 @Composable
@@ -65,7 +76,13 @@ fun HomeScreen(state: MainUiState, viewModel: MainViewModel) {
                 TextButton(onClick = viewModel::refresh) { Text("Refresh") }
             }
 
-            SyncCard(state = state, onSyncNow = viewModel::syncNow)
+            SyncCard(
+                state = state,
+                onSyncNow = viewModel::syncNow,
+                onStopSync = viewModel::stopSync,
+                onStartOver = viewModel::startOver,
+                onSetAutoSync = viewModel::setAutoSync,
+            )
             MetricsCard(state = state)
             AccountCard(
                 state = state,
@@ -94,7 +111,15 @@ fun HomeScreen(state: MainUiState, viewModel: MainViewModel) {
 }
 
 @Composable
-private fun SyncCard(state: MainUiState, onSyncNow: () -> Unit) {
+private fun SyncCard(
+    state: MainUiState,
+    onSyncNow: () -> Unit,
+    onStopSync: () -> Unit,
+    onStartOver: () -> Unit,
+    onSetAutoSync: (Boolean) -> Unit,
+) {
+    var confirmStartOver by remember { mutableStateOf(false) }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -106,14 +131,139 @@ private fun SyncCard(state: MainUiState, onSyncNow: () -> Unit) {
                 label = "Initial backfill",
                 value = if (state.backfillComplete) "Complete" else "Pending",
             )
-            Text(
-                text = "Runs automatically every 6 hours on unmetered Wi-Fi.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = onSyncNow, enabled = !state.busy) {
-                Text("Sync now")
+
+            val progress = state.syncProgress
+            if (progress is SyncProgress.Running) {
+                SyncProgressView(progress = progress, onStop = onStopSync)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onSyncNow, enabled = !state.busy) {
+                        Text("Sync now")
+                    }
+                    OutlinedButton(
+                        onClick = { confirmStartOver = true },
+                        enabled = !state.busy,
+                    ) {
+                        Text("Start over")
+                    }
+                }
             }
+
+            HorizontalDivider()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Automatic sync", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = "Sync in the background every 6 hours",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = state.autoSyncEnabled, onCheckedChange = onSetAutoSync)
+            }
+        }
+    }
+
+    if (confirmStartOver) {
+        AlertDialog(
+            onDismissRequest = { confirmStartOver = false },
+            title = { Text("Start over?") },
+            text = {
+                Text(
+                    "This clears the sync checkpoint. The next sync re-exports your " +
+                        "entire Health Connect history from the beginning.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStartOver = false
+                    onStartOver()
+                }) {
+                    Text("Start over")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmStartOver = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SyncProgressView(progress: SyncProgress.Running, onStop: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SyncSpinner()
+            Text(
+                text = if (progress.backfill) "Backfilling history" else "Syncing",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        if (progress.backfill && progress.recordTypesTotal > 0) {
+            LinearProgressIndicator(
+                progress = {
+                    progress.recordTypesDone.toFloat() / progress.recordTypesTotal
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = when {
+                    progress.currentType != null ->
+                        "Record type ${progress.recordTypesDone + 1} of " +
+                            "${progress.recordTypesTotal}: ${progress.currentType}"
+                    progress.recordTypesDone >= progress.recordTypesTotal -> "Finishing up"
+                    else -> "Starting"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        progress.currentDate?.let { date ->
+            Text(
+                text = "Exported through $date",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Text(
+            text = "${formatCount(progress.recordsExported)} datapoints, " +
+                "${formatCount(progress.filesUploaded)} files exported",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(onClick = onStop) { Text("Stop") }
+    }
+}
+
+/**
+ * A small rotating arc that signals an active sync. Driven by a timer and plain
+ * recomposition rather than the animation framework, so it keeps moving even
+ * while the sync is doing heavy work on the device.
+ */
+@Composable
+private fun SyncSpinner() {
+    var angle by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(40)
+            angle = (angle + 18f) % 360f
+        }
+    }
+    val color = MaterialTheme.colorScheme.primary
+    Canvas(modifier = Modifier.size(20.dp)) {
+        rotate(angle) {
+            drawArc(
+                color = color,
+                startAngle = 0f,
+                sweepAngle = 270f,
+                useCenter = false,
+                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+            )
         }
     }
 }

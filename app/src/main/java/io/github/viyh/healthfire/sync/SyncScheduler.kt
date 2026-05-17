@@ -11,9 +11,9 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Schedules Health Connect sync work: a recurring background sync and an
- * on-demand "sync now". All work is named and unique, so re-scheduling or
- * double-tapping never stacks duplicate runs.
+ * Schedules Health Connect sync work: an on-demand "sync now" and an optional
+ * recurring background sync. Nothing is scheduled automatically - the recurring
+ * sync runs only after the user turns it on; see [SyncSettingsStore].
  */
 object SyncScheduler {
 
@@ -32,16 +32,24 @@ object SyncScheduler {
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
 
-    /** Ensures the recurring sync is scheduled. Idempotent across app starts. */
-    fun ensurePeriodicSync(context: Context) {
+    /** Enables the recurring background sync; the first run is one interval away. */
+    fun enablePeriodicSync(context: Context) {
         val request = PeriodicWorkRequestBuilder<SyncWorker>(
             SYNC_INTERVAL_HOURS, TimeUnit.HOURS,
-        ).setConstraints(periodicConstraints).build()
+        )
+            .setConstraints(periodicConstraints)
+            .setInitialDelay(SYNC_INTERVAL_HOURS, TimeUnit.HOURS)
+            .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             PERIODIC_WORK,
             ExistingPeriodicWorkPolicy.KEEP,
             request,
         )
+    }
+
+    /** Disables the recurring background sync. */
+    fun disablePeriodicSync(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK)
     }
 
     /** Queues an immediate sync; a no-op if one is already pending or running. */
@@ -56,11 +64,8 @@ object SyncScheduler {
         )
     }
 
-    /** Cancels all scheduled sync work. */
-    fun cancel(context: Context) {
-        WorkManager.getInstance(context).apply {
-            cancelUniqueWork(PERIODIC_WORK)
-            cancelUniqueWork(MANUAL_WORK)
-        }
+    /** Stops the in-progress manual sync. A backfill resumes from its checkpoint. */
+    fun stopSync(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(MANUAL_WORK)
     }
 }

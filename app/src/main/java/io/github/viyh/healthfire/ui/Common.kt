@@ -124,6 +124,9 @@ fun formatBytes(bytes: Long): String {
     }
 }
 
+/** Formats a count with thousands separators: 1234567 -> "1,234,567". */
+fun formatCount(count: Int): String = "%,d".format(count)
+
 /** Formats an RFC 3339 instant as a short relative time, or "never" if null. */
 fun formatRelativeTime(rfc3339: String?, now: Instant = Instant.now()): String {
     if (rfc3339 == null) return "never"
