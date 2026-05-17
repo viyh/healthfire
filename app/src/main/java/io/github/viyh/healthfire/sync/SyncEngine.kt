@@ -14,7 +14,13 @@ import kotlin.reflect.KClass
 /** Outcome of a sync run. */
 sealed interface SyncResult {
     data class Success(val recordsExported: Int) : SyncResult
-    data class Failure(val reason: String) : SyncResult
+
+    /**
+     * A sync did not complete. [retryable] is true for transient faults (a
+     * network or Health Connect read error), and false for configuration
+     * faults (not signed in, no permissions) that re-running cannot fix.
+     */
+    data class Failure(val reason: String, val retryable: Boolean) : SyncResult
 }
 
 /**
@@ -34,13 +40,13 @@ class SyncEngine(
     /** Runs one sync and returns its outcome. Never throws. */
     suspend fun sync(): SyncResult {
         if (gateway.availability() != HcAvailability.AVAILABLE) {
-            return SyncResult.Failure("Health Connect is not available.")
+            return SyncResult.Failure("Health Connect is not available.", retryable = false)
         }
         val personUid = authManager.uid
-            ?: return SyncResult.Failure("Not signed in.")
+            ?: return SyncResult.Failure("Not signed in.", retryable = false)
         val grantedTypes = gateway.grantedRecordTypes()
         if (grantedTypes.isEmpty()) {
-            return SyncResult.Failure("No Health Connect permissions granted.")
+            return SyncResult.Failure("No Health Connect permissions granted.", retryable = false)
         }
 
         val exportedAt = Instant.now()
@@ -57,7 +63,7 @@ class SyncEngine(
                 runCatching { metricsStore.record(byType, exportedAt) }
                 SyncResult.Success(byType.values.sumOf { it.records })
             },
-            onFailure = { SyncResult.Failure(it.message ?: "Sync failed.") },
+            onFailure = { SyncResult.Failure(it.message ?: "Sync failed.", retryable = true) },
         )
     }
 

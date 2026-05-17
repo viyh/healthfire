@@ -120,6 +120,9 @@ dependencies {
     // Local persistence
     implementation("androidx.datastore:datastore-preferences:1.1.7")
 
+    // Background sync scheduling
+    implementation("androidx.work:work-runtime:2.11.2")
+
     // Unit tests
     testImplementation("junit:junit:4.13.2")
 }

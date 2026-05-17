@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">healthfire</string>
+
+    <!-- Sync notification (shown while the initial backfill runs). -->
+    <string name="sync_channel_name">Health Connect sync</string>
+    <string name="sync_channel_description">Shown while health data is being exported.</string>
+    <string name="sync_backfill_title">Exporting health history</string>
+    <string name="sync_backfill_text">Backfilling Health Connect data. This runs once.</string>
 </resources>
