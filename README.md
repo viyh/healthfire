@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="design/icon.png" alt="HealthFire" width="120">
+</p>
+
 # healthfire
 
 healthfire is an Android app that reads Android **Health Connect** on the
