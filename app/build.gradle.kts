@@ -108,6 +108,13 @@ dependencies {
     // Firebase, initialized at runtime from imported configuration
     implementation(platform("com.google.firebase:firebase-bom:34.13.0"))
     implementation("com.google.firebase:firebase-common")
+    implementation("com.google.firebase:firebase-auth")
+
+    // Google sign-in via Credential Manager
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     // Local persistence
     implementation("androidx.datastore:datastore-preferences:1.1.7")
