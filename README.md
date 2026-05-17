@@ -1,8 +1,8 @@
 # healthfire
 
 healthfire is an Android app that reads Android **Health Connect** on the
-phone and exports every granted record type to a cloud storage bucket as
-enveloped JSON Lines. It is the on-device first stage of a personal
+phone and exports every granted record type to a cloud storage bucket you own,
+as enveloped JSON Lines. It is the on-device first stage of a personal
 health-data pipeline.
 
 Health Connect is the on-device hub that mobile health sources (scales, blood
@@ -14,20 +14,56 @@ the phone is the only way to read it. healthfire is that app.
 ```
 Health Connect (on-device)
   -> healthfire: read granted record types, wrap each in a fixed envelope
-  -> Firebase Storage (a GCS bucket you own): hive-partitioned JSON Lines
+  -> Firebase Storage (a GCS bucket you own): one JSON Lines file per type
 ```
 
 Each record becomes one JSON line: a flat envelope (record type, timestamps,
 source device, recording method) plus a `payload` object holding the raw
 Health Connect record. Files land at
-`hc/dt=<date>/record_type=<type>/<exported_at>__<uuid>.jsonl`.
+`hc/person_uid=<uid>/record_type=<type>/<exported_at>__<uuid>.jsonl` - one file
+per record type per sync, with large types split into size-capped chunks.
 
-## Configuration
+The first sync backfills all history; later syncs export only what Health
+Connect reports as changed.
 
-healthfire embeds **no** cloud credentials or project identifiers. On first
-run you import your own Firebase configuration (`google-services.json`); the
-app initializes Firebase at runtime and signs you in with Google. One build
-works against anyone's own Firebase / GCP project.
+## Setup
+
+healthfire embeds **no** cloud credentials or project identifiers. You bring
+your own Firebase / GCP project, so one build works for anyone.
+
+### 1. Provision the backend
+
+Use the Terraform in [`terraform/`](terraform/) to set up the GCP side - the
+Firebase project, the export bucket, the Storage security rules, and the
+Android app registration. See [terraform/README.md](terraform/README.md).
+
+One step Terraform can't do: in the Firebase console, enable **Google**
+sign-in (Authentication -> Sign-in method). It auto-provisions the OAuth
+client the app needs.
+
+Then export your `google-services.json`:
+
+```
+cd terraform
+terraform output -raw google_services_json_base64 | base64 -d > google-services.json
+```
+
+### 2. Build and install
+
+See [Building](#building) below. Copy the `google-services.json` onto the
+phone (e.g. to Downloads) before the first run.
+
+### 3. First run
+
+On first launch the app walks three steps:
+
+1. **Import config** - pick your `google-services.json`.
+2. **Sign in** - with the Google account that owns the Firebase project.
+3. **Grant Health Connect access** - choose which record types to export.
+
+Then tap **Sync now** to backfill, and optionally turn on automatic background
+sync (every 6 hours). Your health data goes only to your own bucket - never to
+the app's authors.
 
 ## Building
 
@@ -50,6 +86,13 @@ The `./healthfire` wrapper drives both:
 
 APKs land in `app/build/outputs/apk/`.
 
+## License
+
+GNU General Public License v3.0 - see [LICENSE](LICENSE).
+
 ## Status
 
-Early development.
+Functionally complete: reads Health Connect, backfills and incrementally
+syncs, exports to Firebase Storage, with a first-run setup flow and a
+status/metrics home screen. Not published to an app store - sideload a signed
+APK.

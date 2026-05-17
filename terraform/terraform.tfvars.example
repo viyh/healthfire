@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars and edit.
+
+project_id = "your-gcp-project-id"
+bucket_name = "your-gcp-project-id-healthfire-export"
+location = "US"

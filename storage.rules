@@ -4,7 +4,7 @@
 // (Storage -> Rules) and Publish, or deploy with the Firebase CLI.
 //
 // healthfire writes exports at:
-//   hc/person_uid=<uid>/dt=<date>/record_type=<type>/<exported_at>__<uuid>.jsonl
+//   hc/person_uid=<uid>/record_type=<type>/<exported_at>__<uuid>.jsonl
 // A signed-in user may read and write only under their own person_uid
 // prefix; every other path is denied by default.
 
