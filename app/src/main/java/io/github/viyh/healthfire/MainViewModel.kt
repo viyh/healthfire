@@ -14,6 +14,7 @@ import io.github.viyh.healthfire.hc.RecordTypes
 import io.github.viyh.healthfire.sync.MetricsLog
 import io.github.viyh.healthfire.sync.SyncProgress
 import io.github.viyh.healthfire.sync.SyncScheduler
+import io.github.viyh.healthfire.sync.SyncSettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,11 +42,17 @@ data class MainUiState(
     val metrics: MetricsLog = MetricsLog(),
     val syncProgress: SyncProgress = SyncProgress.Idle,
     val autoSyncEnabled: Boolean = false,
+    val syncIntervalHours: Int = SyncSettingsStore.DEFAULT_INTERVAL_HOURS,
+    val syncOnMetered: Boolean = false,
 ) {
     val healthConnectReady: Boolean get() = availability == HcAvailability.AVAILABLE
     val permissionsGranted: Boolean get() = grantedTypeCount > 0
     val setupComplete: Boolean
         get() = healthConnectReady && configImported && signedIn && permissionsGranted
+
+    /** True when every record type plus the history and background access are granted. */
+    val allPermissionsGranted: Boolean
+        get() = grantedTypeCount == knownTypeCount && historyGranted && backgroundGranted
 }
 
 /**
@@ -67,6 +74,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
         observeSyncProgress()
         observeAutoSync()
+        observeSyncInterval()
+        observeSyncOnMetered()
     }
 
     /** Mirrors the sync engine's live progress into the UI state. */
@@ -102,6 +111,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             container.syncSettingsStore.autoSyncEnabled.collect { enabled ->
                 _uiState.update { it.copy(autoSyncEnabled = enabled) }
+            }
+        }
+    }
+
+    /** Mirrors the saved background-sync interval into the UI state. */
+    private fun observeSyncInterval() {
+        viewModelScope.launch {
+            container.syncSettingsStore.syncIntervalHours.collect { hours ->
+                _uiState.update { it.copy(syncIntervalHours = hours) }
+            }
+        }
+    }
+
+    /** Mirrors the saved metered-network preference into the UI state. */
+    private fun observeSyncOnMetered() {
+        viewModelScope.launch {
+            container.syncSettingsStore.syncOnMetered.collect { enabled ->
+                _uiState.update { it.copy(syncOnMetered = enabled) }
             }
         }
     }
@@ -213,9 +240,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             container.syncSettingsStore.setAutoSyncEnabled(enabled)
             if (enabled) {
-                SyncScheduler.enablePeriodicSync(app)
+                val s = _uiState.value
+                SyncScheduler.enablePeriodicSync(
+                    app, s.syncIntervalHours.toLong(), s.syncOnMetered,
+                )
             } else {
                 SyncScheduler.disablePeriodicSync(app)
+            }
+        }
+    }
+
+    /** Sets how often the background sync runs, re-scheduling it if it is on. */
+    fun setSyncInterval(hours: Int) {
+        viewModelScope.launch {
+            container.syncSettingsStore.setSyncIntervalHours(hours)
+            if (_uiState.value.autoSyncEnabled) {
+                SyncScheduler.disablePeriodicSync(app)
+                SyncScheduler.enablePeriodicSync(app, hours.toLong(), _uiState.value.syncOnMetered)
+            }
+        }
+    }
+
+    /** Allows or forbids background syncs over a metered (mobile-data) network. */
+    fun setSyncOnMetered(enabled: Boolean) {
+        viewModelScope.launch {
+            container.syncSettingsStore.setSyncOnMetered(enabled)
+            if (_uiState.value.autoSyncEnabled) {
+                SyncScheduler.disablePeriodicSync(app)
+                SyncScheduler.enablePeriodicSync(
+                    app, _uiState.value.syncIntervalHours.toLong(), enabled,
+                )
             }
         }
     }
@@ -226,6 +280,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             container.syncStateStore.clear()
             refresh()
+        }
+    }
+
+    /** Clears all recorded export statistics. */
+    fun resetMetrics() {
+        viewModelScope.launch {
+            runCatching { container.syncMetricsStore.clear() }
+            refreshMetrics()
         }
     }
 

@@ -39,9 +39,12 @@ class HealthfireApp : Application() {
      * a schedule left over from a previous install does not run unbidden.
      */
     private fun reconcileAutoSync() {
-        val enabled = runBlocking { container.syncSettingsStore.autoSyncEnabled.first() }
+        val settings = container.syncSettingsStore
+        val enabled = runBlocking { settings.autoSyncEnabled.first() }
         if (enabled) {
-            SyncScheduler.enablePeriodicSync(this)
+            val hours = runBlocking { settings.syncIntervalHours.first() }
+            val metered = runBlocking { settings.syncOnMetered.first() }
+            SyncScheduler.enablePeriodicSync(this, hours.toLong(), metered)
         } else {
             SyncScheduler.disablePeriodicSync(this)
         }

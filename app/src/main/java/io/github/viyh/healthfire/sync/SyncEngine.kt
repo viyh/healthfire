@@ -146,14 +146,21 @@ class SyncEngine(
                 Log.i(TAG, "backfill: $typeName (${index + 1}/${types.size}) already done")
             } else {
                 Log.i(TAG, "backfill: reading $typeName (${index + 1}/${types.size})")
-                val typeMetrics = exportType(type, typeName, personUid, exportedAt)
+                val dates = HashMap<String, MutableSet<String>>()
+                val typeMetrics = exportType(type, typeName, personUid, exportedAt, dates)
                 Log.i(
                     TAG,
                     "backfill: $typeName done (${typeMetrics.records} records, " +
                         "${typeMetrics.files} files)",
                 )
                 if (typeMetrics.records > 0) {
-                    runCatching { metricsStore.record(mapOf(typeName to typeMetrics), exportedAt) }
+                    runCatching {
+                        metricsStore.record(
+                            mapOf(typeName to typeMetrics),
+                            mapOf(typeName to coverageOf(dates[typeName])),
+                            exportedAt,
+                        )
+                    }
                 }
                 totals[typeName] = typeMetrics
                 doneTypes.add(typeName)
@@ -180,12 +187,13 @@ class SyncEngine(
         typeName: String,
         personUid: String,
         exportedAt: Instant,
+        dates: MutableMap<String, MutableSet<String>>,
     ): TypeMetrics {
         val writer = JsonlWriter()
         val tally = HashMap<String, TypeMetrics>()
         gateway.readPaged(type, BACKFILL_START, exportedAt) { page ->
             for (record in page) {
-                exportRecord(record, writer, personUid, exportedAt, tally)
+                exportRecord(record, writer, personUid, exportedAt, tally, dates)
             }
             Log.i(TAG, "backfill: $typeName +${page.size}")
         }
@@ -211,11 +219,14 @@ class SyncEngine(
         Log.i(TAG, "incremental: ${changes.upsertedRecords.size} changed records")
         val writer = JsonlWriter()
         val totals = HashMap<String, TypeMetrics>()
+        val dates = HashMap<String, MutableSet<String>>()
         for (record in changes.upsertedRecords) {
-            exportRecord(record, writer, personUid, exportedAt, totals)
+            exportRecord(record, writer, personUid, exportedAt, totals, dates)
         }
         writer.flush().forEach { uploadFile(it, personUid, exportedAt, totals) }
-        runCatching { metricsStore.record(totals, exportedAt) }
+        runCatching {
+            metricsStore.record(totals, dates.mapValues { coverageOf(it.value) }, exportedAt)
+        }
         stateStore.save(
             SyncState(
                 changesToken = changes.nextToken,
@@ -233,9 +244,12 @@ class SyncEngine(
         personUid: String,
         exportedAt: Instant,
         tally: MutableMap<String, TypeMetrics>,
+        dates: MutableMap<String, MutableSet<String>>,
     ) {
         val envelope = EnvelopeMapper.toEnvelope(record, personUid, exportedAt, appVersion)
         writer.add(envelope)?.let { uploadFile(it, personUid, exportedAt, tally) }
+        dates.getOrPut(envelope.record_type) { HashSet() }
+            .add(envelope.recorded_at.substringBefore('T'))
         updateProgress {
             it.copy(
                 recordsExported = it.recordsExported + 1,
@@ -269,6 +283,12 @@ class SyncEngine(
     private fun laterDate(current: String?, rfc3339: String): String {
         val date = rfc3339.substringBefore('T')
         return if (current == null || date > current) date else current
+    }
+
+    /** Builds a [TypeCoverage] from the set of distinct "yyyy-MM-dd" days seen. */
+    private fun coverageOf(days: Set<String>?): TypeCoverage {
+        if (days.isNullOrEmpty()) return TypeCoverage()
+        return TypeCoverage(days.minOrNull(), days.maxOrNull(), days.size)
     }
 
     private fun rfc3339(instant: Instant): String =

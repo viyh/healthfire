@@ -16,7 +16,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.viyh.healthfire.ui.HealthConnectUnavailableScreen
-import io.github.viyh.healthfire.ui.HomeScreen
+import io.github.viyh.healthfire.ui.MainScreen
 import io.github.viyh.healthfire.ui.SetupScreen
 import io.github.viyh.healthfire.ui.theme.HealthfireTheme
 
@@ -47,7 +47,7 @@ private fun HealthfireRoot(viewModel: MainViewModel = viewModel()) {
         state.loading -> LoadingScreen()
         !state.healthConnectReady -> HealthConnectUnavailableScreen(state.availability)
         !state.setupComplete -> SetupScreen(state = state, viewModel = viewModel)
-        else -> HomeScreen(state = state, viewModel = viewModel)
+        else -> MainScreen(state = state, viewModel = viewModel)
     }
 }
 

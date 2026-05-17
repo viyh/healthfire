@@ -1,0 +1,10 @@
+<!-- Bottom-nav icon for the Stats tab: a three-bar chart. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,13 L8,13 L8,20 L4,20 Z M10,8 L14,8 L14,20 L10,20 Z M16,4 L20,4 L20,20 L16,20 Z" />
+</vector>

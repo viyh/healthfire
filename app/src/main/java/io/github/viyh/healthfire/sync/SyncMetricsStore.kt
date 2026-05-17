@@ -26,6 +26,25 @@ data class TypeMetrics(
         TypeMetrics(files + other.files, records + other.records, bytes + other.bytes)
 }
 
+/**
+ * The date span of the health data exported for one record type: the earliest
+ * and latest record date seen ("yyyy-MM-dd") and the count of distinct days
+ * with data. Exact after a full backfill; a Start over re-sync refreshes it.
+ */
+@Serializable
+data class TypeCoverage(
+    val firstDay: String? = null,
+    val lastDay: String? = null,
+    val days: Int = 0,
+) {
+    /** Widens the span to cover [other]; the day count keeps the larger total. */
+    fun mergedWith(other: TypeCoverage): TypeCoverage = TypeCoverage(
+        firstDay = listOfNotNull(firstDay, other.firstDay).minOrNull(),
+        lastDay = listOfNotNull(lastDay, other.lastDay).maxOrNull(),
+        days = maxOf(days, other.days),
+    )
+}
+
 /** Everything uploaded on one UTC calendar day, broken down by record type. */
 @Serializable
 data class DayMetrics(
@@ -38,12 +57,14 @@ enum class MetricsWindow { TODAY, LAST_7_DAYS, LAST_30_DAYS, ALL_TIME }
 /**
  * Rolling upload metrics. [days] keeps recent per-day detail keyed by UTC date
  * ("yyyy-MM-dd") and is pruned to [RETENTION_DAYS]; [lifetime] is the running
- * total since install and is never pruned.
+ * total since install and is never pruned. [coverage] is the date span of the
+ * exported health data per record type.
  */
 @Serializable
 data class MetricsLog(
     val days: Map<String, DayMetrics> = emptyMap(),
     val lifetime: Map<String, TypeMetrics> = emptyMap(),
+    val coverage: Map<String, TypeCoverage> = emptyMap(),
 ) {
     /** Per-type totals over every day bucket on or after [fromDate] (inclusive). */
     fun since(fromDate: String): Map<String, TypeMetrics> =
@@ -63,18 +84,32 @@ data class MetricsLog(
         }
 
     /**
-     * Folds one sync run's [uploads] into this log: merged into the day bucket
-     * for [at] and into [lifetime], with day buckets older than the retention
-     * window dropped. Empty [uploads] returns this log unchanged.
+     * Folds one sync run into this log: [uploads] merged into the day bucket
+     * for [at] and into [lifetime] (day buckets past the retention window
+     * dropped), and [coverage] merged per record type. An empty run is a no-op.
      */
-    fun recording(uploads: Map<String, TypeMetrics>, at: Instant): MetricsLog {
-        if (uploads.isEmpty()) return this
+    fun recording(
+        uploads: Map<String, TypeMetrics>,
+        coverage: Map<String, TypeCoverage>,
+        at: Instant,
+    ): MetricsLog {
+        if (uploads.isEmpty() && coverage.isEmpty()) return this
         val day = utcDate(at)
         val cutoff = utcDate(at.minus(RETENTION_DAYS, ChronoUnit.DAYS))
-        val merged = (days[day]?.byType ?: emptyMap()).mergedWith(uploads)
+        val mergedDays = if (uploads.isEmpty()) {
+            days.filterKeys { it >= cutoff }
+        } else {
+            val merged = (days[day]?.byType ?: emptyMap()).mergedWith(uploads)
+            (days + (day to DayMetrics(merged))).filterKeys { it >= cutoff }
+        }
+        val mergedCoverage = HashMap(this.coverage)
+        for ((type, span) in coverage) {
+            mergedCoverage[type] = (mergedCoverage[type] ?: TypeCoverage()).mergedWith(span)
+        }
         return MetricsLog(
-            days = (days + (day to DayMetrics(merged))).filterKeys { it >= cutoff },
+            days = mergedDays,
             lifetime = lifetime.mergedWith(uploads),
+            coverage = mergedCoverage,
         )
     }
 
@@ -112,14 +147,23 @@ class SyncMetricsStore(private val context: Context) {
         return runCatching { Json.decodeFromString<MetricsLog>(stored) }.getOrDefault(MetricsLog())
     }
 
-    /** Folds one sync run's uploads into the stored log. */
-    suspend fun record(uploads: Map<String, TypeMetrics>, at: Instant) {
-        if (uploads.isEmpty()) return
+    /** Folds one sync run's uploads and date coverage into the stored log. */
+    suspend fun record(
+        uploads: Map<String, TypeMetrics>,
+        coverage: Map<String, TypeCoverage>,
+        at: Instant,
+    ) {
+        if (uploads.isEmpty() && coverage.isEmpty()) return
         context.metricsDataStore.edit { prefs ->
             val current = prefs[METRICS_LOG]
                 ?.let { runCatching { Json.decodeFromString<MetricsLog>(it) }.getOrNull() }
                 ?: MetricsLog()
-            prefs[METRICS_LOG] = Json.encodeToString(current.recording(uploads, at))
+            prefs[METRICS_LOG] = Json.encodeToString(current.recording(uploads, coverage, at))
         }
+    }
+
+    /** Clears all stored metrics. */
+    suspend fun clear() {
+        context.metricsDataStore.edit { it.remove(METRICS_LOG) }
     }
 }

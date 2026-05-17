@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Healthfire" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Dark window theme so there is no light flash before Compose draws. -->
+    <style name="Theme.Healthfire" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

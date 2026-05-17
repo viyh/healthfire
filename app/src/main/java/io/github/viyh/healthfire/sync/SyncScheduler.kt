@@ -13,32 +13,36 @@ import java.util.concurrent.TimeUnit
 /**
  * Schedules Health Connect sync work: an on-demand "sync now" and an optional
  * recurring background sync. Nothing is scheduled automatically - the recurring
- * sync runs only after the user turns it on; see [SyncSettingsStore].
+ * sync runs only after the user turns it on; see [SyncSettingsStore]. Its
+ * interval and network policy are user-configurable, so changing either
+ * cancels and re-enables.
  */
 object SyncScheduler {
 
     private const val PERIODIC_WORK = "healthfire-periodic-sync"
     private const val MANUAL_WORK = "healthfire-manual-sync"
-    private const val SYNC_INTERVAL_HOURS = 6L
-
-    /** Recurring sync: unmetered network only, and not while the battery is low. */
-    private val periodicConstraints = Constraints.Builder()
-        .setRequiredNetworkType(NetworkType.UNMETERED)
-        .setRequiresBatteryNotLow(true)
-        .build()
 
     /** Manual sync: the user asked for it now, so only require connectivity. */
     private val manualConstraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
 
-    /** Enables the recurring background sync; the first run is one interval away. */
-    fun enablePeriodicSync(context: Context) {
-        val request = PeriodicWorkRequestBuilder<SyncWorker>(
-            SYNC_INTERVAL_HOURS, TimeUnit.HOURS,
-        )
-            .setConstraints(periodicConstraints)
-            .setInitialDelay(SYNC_INTERVAL_HOURS, TimeUnit.HOURS)
+    /**
+     * Enables the recurring background sync every [intervalHours] hours; the
+     * first run is one interval away. With [allowMetered] off the sync waits
+     * for unmetered Wi-Fi. Keeps any schedule already in place, so to apply a
+     * changed setting the caller disables first (see the view model).
+     */
+    fun enablePeriodicSync(context: Context, intervalHours: Long, allowMetered: Boolean) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(
+                if (allowMetered) NetworkType.CONNECTED else NetworkType.UNMETERED,
+            )
+            .setRequiresBatteryNotLow(true)
+            .build()
+        val request = PeriodicWorkRequestBuilder<SyncWorker>(intervalHours, TimeUnit.HOURS)
+            .setConstraints(constraints)
+            .setInitialDelay(intervalHours, TimeUnit.HOURS)
             .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             PERIODIC_WORK,
