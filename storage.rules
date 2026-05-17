@@ -1,0 +1,20 @@
+// healthfire - Cloud Storage for Firebase security rules.
+//
+// Canonical copy of the rules. Paste into the Firebase console
+// (Storage -> Rules) and Publish, or deploy with the Firebase CLI.
+//
+// healthfire writes exports at:
+//   hc/person_uid=<uid>/dt=<date>/record_type=<type>/<exported_at>__<uuid>.jsonl
+// A signed-in user may read and write only under their own person_uid
+// prefix; every other path is denied by default.
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /hc/{personSegment}/{filePath=**} {
+      allow read, write: if request.auth != null
+        && personSegment == 'person_uid=' + request.auth.uid;
+    }
+  }
+}

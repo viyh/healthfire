@@ -3,6 +3,7 @@ package io.github.viyh.healthfire
 import android.content.Context
 import io.github.viyh.healthfire.firebase.AuthManager
 import io.github.viyh.healthfire.firebase.FirebaseConfigStore
+import io.github.viyh.healthfire.firebase.StorageUploader
 import io.github.viyh.healthfire.hc.HealthConnectGateway
 
 /**
@@ -13,4 +14,5 @@ class AppContainer(context: Context) {
     val healthConnectGateway: HealthConnectGateway = HealthConnectGateway(context)
     val firebaseConfigStore: FirebaseConfigStore = FirebaseConfigStore(context)
     val authManager: AuthManager = AuthManager(firebaseConfigStore)
+    val storageUploader: StorageUploader = StorageUploader()
 }

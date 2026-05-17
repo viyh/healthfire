@@ -109,6 +109,7 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.13.0"))
     implementation("com.google.firebase:firebase-common")
     implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-storage")
 
     // Google sign-in via Credential Manager
     implementation("androidx.credentials:credentials:1.6.0")
