@@ -10,6 +10,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -31,6 +32,9 @@ data class DayMetrics(
     val byType: Map<String, TypeMetrics> = emptyMap(),
 )
 
+/** A time window for viewing [MetricsLog] totals. */
+enum class MetricsWindow { TODAY, LAST_7_DAYS, LAST_30_DAYS, ALL_TIME }
+
 /**
  * Rolling upload metrics. [days] keeps recent per-day detail keyed by UTC date
  * ("yyyy-MM-dd") and is pruned to [RETENTION_DAYS]; [lifetime] is the running
@@ -45,6 +49,18 @@ data class MetricsLog(
     fun since(fromDate: String): Map<String, TypeMetrics> =
         days.filterKeys { it >= fromDate }.values
             .fold(emptyMap()) { acc, day -> acc.mergedWith(day.byType) }
+
+    /**
+     * Per-type totals for [window], relative to the UTC date [today].
+     * [MetricsWindow.ALL_TIME] returns [lifetime]; the rest sum day buckets.
+     */
+    fun windowed(window: MetricsWindow, today: LocalDate): Map<String, TypeMetrics> =
+        when (window) {
+            MetricsWindow.TODAY -> since(today.toString())
+            MetricsWindow.LAST_7_DAYS -> since(today.minusDays(6).toString())
+            MetricsWindow.LAST_30_DAYS -> since(today.minusDays(29).toString())
+            MetricsWindow.ALL_TIME -> lifetime
+        }
 
     /**
      * Folds one sync run's [uploads] into this log: merged into the day bucket

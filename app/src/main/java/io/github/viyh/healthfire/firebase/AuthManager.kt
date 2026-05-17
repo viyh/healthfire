@@ -24,6 +24,10 @@ class AuthManager(private val configStore: FirebaseConfigStore) {
     val uid: String?
         get() = runCatching { auth.currentUser?.uid }.getOrNull()
 
+    /** The signed-in user's email address, or null if not signed in. */
+    val email: String?
+        get() = runCatching { auth.currentUser?.email }.getOrNull()
+
     /** Whether a user is currently signed in. */
     val isSignedIn: Boolean get() = uid != null
 

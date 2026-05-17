@@ -1,109 +1,168 @@
 package io.github.viyh.healthfire
 
+import android.app.Activity
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.viyh.healthfire.firebase.FirebaseConfig
+import io.github.viyh.healthfire.firebase.FirebaseRuntime
 import io.github.viyh.healthfire.hc.HcAvailability
 import io.github.viyh.healthfire.hc.RecordTypes
+import io.github.viyh.healthfire.sync.MetricsLog
+import io.github.viyh.healthfire.sync.SyncScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Duration
-import java.time.Instant
-
-/** State for the step-1 Health Connect status screen. */
-data class MainUiState(
-    val availability: HcAvailability,
-    val knownTypeCount: Int,
-    val grantedTypeCount: Int = 0,
-    val historyGranted: Boolean = false,
-    val backgroundGranted: Boolean = false,
-    val isReading: Boolean = false,
-    val lastReadSummary: String? = null,
-)
 
 /**
- * Drives the step-1 verification screen: reports Health Connect status and
- * runs a logged read of recently granted data.
+ * UI state for [MainActivity]. The same state drives both the first-run setup
+ * flow and the home screen; [setupComplete] decides which is shown.
+ */
+data class MainUiState(
+    val loading: Boolean = true,
+    val availability: HcAvailability = HcAvailability.NOT_SUPPORTED,
+    val configImported: Boolean = false,
+    val signedIn: Boolean = false,
+    val accountEmail: String? = null,
+    val grantedTypeCount: Int = 0,
+    val knownTypeCount: Int = RecordTypes.ALL.size,
+    val historyGranted: Boolean = false,
+    val backgroundGranted: Boolean = false,
+    val busy: Boolean = false,
+    val message: String? = null,
+    val lastSyncAt: String? = null,
+    val backfillComplete: Boolean = false,
+    val metrics: MetricsLog = MetricsLog(),
+) {
+    val healthConnectReady: Boolean get() = availability == HcAvailability.AVAILABLE
+    val permissionsGranted: Boolean get() = grantedTypeCount > 0
+    val setupComplete: Boolean
+        get() = healthConnectReady && configImported && signedIn && permissionsGranted
+}
+
+/**
+ * Drives [MainActivity]: derives setup progress and home-screen status from the
+ * app's stores and Health Connect, and runs the first-run setup actions.
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val gateway = (application as HealthfireApp).container.healthConnectGateway
+    private val app = application as HealthfireApp
+    private val container get() = app.container
 
-    private val _uiState = MutableStateFlow(
-        MainUiState(
-            availability = gateway.availability(),
-            knownTypeCount = RecordTypes.ALL.size,
-        ),
-    )
+    private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    /** The full permission set to hand to the Health Connect permission request. */
-    val permissionsToRequest: Set<String> = gateway.readPermissions
+    /** The Health Connect permission set to hand to the permission request. */
+    val permissionsToRequest: Set<String> = container.healthConnectGateway.readPermissions
 
-    /** Re-reads availability and granted permissions. Safe to call on every resume. */
+    init {
+        refresh()
+    }
+
+    /** Re-derives the whole UI state. Safe to call on every resume. */
     fun refresh() {
-        val availability = gateway.availability()
-        _uiState.update { it.copy(availability = availability) }
-        if (availability != HcAvailability.AVAILABLE) return
         viewModelScope.launch {
-            runCatching { gateway.grantedPermissions() }
-                .onSuccess(::applyGrantedPermissions)
-                .onFailure { Log.e(TAG, "Could not read granted permissions", it) }
-        }
-    }
+            val gateway = container.healthConnectGateway
+            val availability = gateway.availability()
 
-    private fun applyGrantedPermissions(granted: Set<String>) {
-        val grantedTypes = RecordTypes.ALL.count {
-            HealthPermission.getReadPermission(it) in granted
-        }
-        _uiState.update {
-            it.copy(
-                grantedTypeCount = grantedTypes,
-                historyGranted = HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted,
-                backgroundGranted =
-                    HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in granted,
-            )
-        }
-    }
-
-    /** Reads the last [READ_WINDOW_DAYS] days of every granted type, logging a breakdown. */
-    fun readRecentData() {
-        val current = _uiState.value
-        if (current.availability != HcAvailability.AVAILABLE || current.isReading) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isReading = true) }
-            val summary = runCatching { readAndLog() }.getOrElse { e ->
-                Log.e(TAG, "Read failed", e)
-                "Read failed: ${e.message}"
+            val config = runCatching { container.firebaseConfigStore.load() }.getOrNull()
+            if (config != null && !FirebaseRuntime.isReady(app)) {
+                runCatching { FirebaseRuntime.initialize(app, config) }
+                    .onFailure { Log.e(TAG, "Firebase initialization failed", it) }
             }
-            _uiState.update { it.copy(isReading = false, lastReadSummary = summary) }
+            val configImported = config != null && FirebaseRuntime.isReady(app)
+            val signedIn = configImported && container.authManager.isSignedIn
+
+            val granted = if (availability == HcAvailability.AVAILABLE) {
+                runCatching { gateway.grantedPermissions() }.getOrDefault(emptySet())
+            } else {
+                emptySet()
+            }
+            val syncState = runCatching { container.syncStateStore.load() }.getOrNull()
+            val metrics = runCatching { container.syncMetricsStore.load() }
+                .getOrDefault(MetricsLog())
+
+            _uiState.update {
+                it.copy(
+                    loading = false,
+                    availability = availability,
+                    configImported = configImported,
+                    signedIn = signedIn,
+                    accountEmail = if (configImported) container.authManager.email else null,
+                    grantedTypeCount = RecordTypes.ALL.count { type ->
+                        HealthPermission.getReadPermission(type) in granted
+                    },
+                    historyGranted =
+                        HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in granted,
+                    backgroundGranted =
+                        HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in granted,
+                    lastSyncAt = syncState?.lastSyncAt,
+                    backfillComplete = syncState?.backfillComplete ?: false,
+                    metrics = metrics,
+                )
+            }
         }
     }
 
-    private suspend fun readAndLog(): String {
-        val end = Instant.now()
-        val start = end.minus(Duration.ofDays(READ_WINDOW_DAYS))
-        val types = gateway.grantedRecordTypes()
-        if (types.isEmpty()) return "No record types granted yet. Tap Grant first."
-        Log.i(TAG, "Reading ${types.size} granted record types over the last $READ_WINDOW_DAYS days")
-        var total = 0
-        for (type in types) {
-            val count = gateway.readAll(type, start, end).size
-            total += count
-            Log.i(TAG, "  ${RecordTypes.recordTypeName(type)}: $count")
+    /** Imports a google-services.json from [uri] and brings up Firebase. */
+    fun importConfig(uri: Uri?) {
+        if (uri == null || _uiState.value.busy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true, message = null) }
+            val error = runCatching {
+                val json = app.contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.readBytes().decodeToString()
+                } ?: error("Could not open the selected file.")
+                val config = FirebaseConfig.parse(json, app.packageName)
+                container.firebaseConfigStore.save(config)
+                FirebaseRuntime.initialize(app, config)
+            }.exceptionOrNull()
+            _uiState.update { it.copy(busy = false, message = error?.message) }
+            refresh()
         }
-        Log.i(TAG, "Done: $total records across ${types.size} record types")
-        return "Read $total records across ${types.size} granted types " +
-            "(last $READ_WINDOW_DAYS days). See logcat for the per-type breakdown."
+    }
+
+    /** Runs Google sign-in; [activity] is required by Credential Manager. */
+    fun signIn(activity: Activity) {
+        if (_uiState.value.busy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true, message = null) }
+            val error = container.authManager.signIn(activity).exceptionOrNull()
+            _uiState.update { it.copy(busy = false, message = error?.message) }
+            refresh()
+        }
+    }
+
+    /** Signs out of Firebase Auth. */
+    fun signOut() {
+        if (_uiState.value.busy) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = true, message = null) }
+            container.authManager.signOut(app)
+            _uiState.update { it.copy(busy = false) }
+            refresh()
+        }
+    }
+
+    /** Queues an immediate sync through WorkManager. */
+    fun syncNow() {
+        SyncScheduler.syncNow(app)
+        _uiState.update {
+            it.copy(message = "Sync queued. Tap Refresh in a moment to see results.")
+        }
+    }
+
+    /** Clears the transient status message. */
+    fun dismissMessage() {
+        _uiState.update { it.copy(message = null) }
     }
 
     private companion object {
         const val TAG = "Healthfire"
-        const val READ_WINDOW_DAYS = 30L
     }
 }

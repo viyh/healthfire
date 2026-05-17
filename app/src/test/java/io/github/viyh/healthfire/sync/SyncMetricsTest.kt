@@ -3,6 +3,7 @@ package io.github.viyh.healthfire.sync
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.Instant
+import java.time.LocalDate
 
 class SyncMetricsTest {
 
@@ -90,5 +91,31 @@ class SyncMetricsTest {
         val log = MetricsLog()
             .recording(mapOf("steps" to type(1, 10, 100)), Instant.parse("2026-05-16T00:00:00Z"))
         assertEquals(log, log.recording(emptyMap(), Instant.parse("2026-05-16T06:00:00Z")))
+    }
+
+    @Test
+    fun windowedSelectsTheDayBucketsForEachInterval() {
+        val today = LocalDate.parse("2026-05-16")
+        val log = MetricsLog()
+            .recording(mapOf("steps" to type(1, 10, 100)), Instant.parse("2026-05-16T08:00:00Z"))
+            .recording(mapOf("steps" to type(1, 20, 200)), Instant.parse("2026-05-12T08:00:00Z"))
+            .recording(mapOf("steps" to type(1, 40, 400)), Instant.parse("2026-04-25T08:00:00Z"))
+
+        assertEquals(
+            mapOf("steps" to type(1, 10, 100)),
+            log.windowed(MetricsWindow.TODAY, today),
+        )
+        assertEquals(
+            mapOf("steps" to type(2, 30, 300)),
+            log.windowed(MetricsWindow.LAST_7_DAYS, today),
+        )
+        assertEquals(
+            mapOf("steps" to type(3, 70, 700)),
+            log.windowed(MetricsWindow.LAST_30_DAYS, today),
+        )
+        assertEquals(
+            mapOf("steps" to type(3, 70, 700)),
+            log.windowed(MetricsWindow.ALL_TIME, today),
+        )
     }
 }
